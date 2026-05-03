@@ -1,66 +1,97 @@
-# phase1_router.py
+from langchain_community.vectorstores import FAISS
+from langchain.docstore.document import Document
+from config import embeddings
+import numpy as np
 
-from langchain_chroma import Chroma
-from langchain_core.documents import Document
-from config import embeddings, BOT_PERSONAS
+# Personas
+
+BOT_PERSONAS = {
+    "bot_a": """
+    I believe AI and crypto will solve all human problems.
+    I am highly optimistic about technology, Elon Musk,
+    and space exploration. I dismiss regulatory concerns.
+    """,
+
+    "bot_b": """
+    I believe late-stage capitalism and tech monopolies
+    are destroying society. I am highly critical of AI,
+    social media, and billionaires. I value privacy and nature.
+    """,
+
+    "bot_c": """
+    I strictly care about markets, interest rates,
+    trading algorithms, and making money.
+    I speak in finance jargon and view everything
+    through the lens of ROI.
+    """
+}
 
 
-def build_persona_store():
-    """Creates a small in-memory vector DB of bot personas."""
-    
-    documents = []
+# Convert Personas into Documents
 
-    for bot_id, bot in BOT_PERSONAS.items():
-        documents.append(
-            Document(
-                page_content=bot["persona"],
-                metadata={
-                    "bot_id": bot_id,
-                    "name": bot["name"]
-                }
-            )
-        )
+persona_docs = [
+    Document(
+        page_content=persona,
+        metadata={"bot_id": bot_id}
+    )
+    for bot_id, persona in BOT_PERSONAS.items()
+]
 
-    return Chroma.from_documents(
-        documents,
-        embedding=embeddings,
-        collection_name="persona_router"
+# Create Vector Store
+vectorstore = FAISS.from_documents(persona_docs, embeddings)
+
+# Cosine Similarity Helper
+
+def cosine_similarity(vec1, vec2):
+
+    vec1 = np.array(vec1)
+    vec2 = np.array(vec2)
+
+    return np.dot(vec1, vec2) / (
+        np.linalg.norm(vec1) * np.linalg.norm(vec2)
     )
 
+# Routing Function
 
-def route_post_to_bots(post: str, threshold: float = 0.85):
+def route_post_to_bots(post_content: str, threshold: float = 0.85):
+
     """
-    Match incoming post with relevant bot personas using cosine similarity.
+    Route user posts to relevant bots
+    using vector similarity.
     """
 
-    print("\n--- PHASE 1: Persona Routing ---")
-    print(f"Incoming post: {post[:80]}...\n")
+    matched_bots = []
 
-    store = build_persona_store()
+    # Post Embedding
+    post_embedding = embeddings.embed_query(post_content)
 
-    # top results 
-    results = store.similarity_search_with_score(post, k=5)
+    for bot_id, persona in BOT_PERSONAS.items():
 
-    matched = []
+        persona_embedding = embeddings.embed_query(persona)
 
-    for doc, distance in results:
-    
-        similarity = 1 - distance         # cosine distance base similarity
+        similarity = cosine_similarity(
+            post_embedding,
+            persona_embedding
+        )
 
-        name = doc.metadata["name"]
-        bot_id = doc.metadata["bot_id"]
+           if similarity >= threshold:
 
-        print(f"{name:<20} → similarity: {similarity:.3f}")
+            matched_bots.append({
+                "bot_id": bot_id,
+                "similarity": round(float(similarity), 2)
+            })
 
-        if similarity > threshold:
-            matched.append(bot_id)
+    return matched_bots
 
-    
-    matched = list(set(matched))            # Remove Duplicates
+# Test Example
 
-    if not matched:
-        print("\nNo strong match found. Using fallback bot.\n")
-        return ["general_bot"]
+if __name__ == "__main__":
 
-    print(f"\nMatched bots: {matched}\n")
-    return matched
+    post = "OpenAI just released a new AI model that may replace junior developers"
+
+    results = route_post_to_bots(post)
+
+    print("
+PHASE 1 ROUTING")
+    print("Matched Bots:")
+    print(results)

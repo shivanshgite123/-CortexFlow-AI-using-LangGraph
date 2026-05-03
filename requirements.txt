@@ -1,0 +1,8 @@
+langchain
+langgraph
+langchain-openai
+chromadb
+faiss-cpu
+python-dotenv
+numpy
+pydantic

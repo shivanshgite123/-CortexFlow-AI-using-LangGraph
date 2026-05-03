@@ -1,145 +1,144 @@
 from typing import TypedDict
-from pydantic import BaseModel
-from langgraph.graph import StateGraph, START, END
-from langchain_core.prompts import ChatPromptTemplate
 from langchain_core.tools import tool
+from langgraph.graph import StateGraph, END
+from config import llm
+import json
 
-from config import llm, BOT_PERSONAS
 
 
+# Mock Search Tool
 
-# 1. Mock Tool
 
 @tool
-def mock_searxng_search(query: str) -> str:
-    """Return mock news based on keywords"""
-    
-    q = query.lower()
+def mock_searxng_search(query: str):
 
-    if "crypto" in q:
-        return "Bitcoin hits new all-time high amid regulatory ETF approvals."
-    elif "ai" in q:
-        return "OpenAI releases new model surpassing human reasoning."
-    elif "ev" in q:
-        return "Tesla reports record EV sales but faces battery issues."
+    query = query.lower()
 
-    return "Global markets remain unstable due to inflation concerns."
+    if "crypto" in query:
+        return "Bitcoin hits new all-time high amid ETF approvals"
 
+    elif "ai" in query:
+        return "AI replaces junior developers in multiple startups"
 
+    elif "market" in query:
+        return "Federal Reserve may reduce interest rates next quarter"
 
-# 2. Output Schema (STRICT JSON)
-
-class FinalPost(BaseModel):
-    bot_id: str
-    topic: str
-    post_content: str
+    return "No major news found"
 
 
+# LangGraph State
 
-# 3. Graph State
 
-class State(TypedDict):
+class GraphState(TypedDict):
     bot_id: str
     persona: str
-    query: str
-    results: str
-    output: dict
+    topic: str
+    search_results: str
+    post_content: str
 
 
 
 # Node 1: Decide Search
 
-def decide_search(state: State) -> State:
-    prompt = ChatPromptTemplate.from_template(
-        """You are:
-{persona}
 
-Decide ONE topic to post about today.
-Return only a short search query."""
-    )
+def decide_search(state: GraphState):
 
-    chain = prompt | llm
-    res = chain.invoke({"persona": state["persona"]})
+    prompt = f"""
+    You are this persona:
 
-    state["query"] = res.content.strip()
-    return state
+    {state['persona']}
+
+    Decide a trending topic to post about.
+    Return only a short search query.
+    """
+
+    response = llm.invoke(prompt)
+
+    return {
+        "topic": response.content
+    }
 
 
 
 # Node 2: Web Search
 
-def web_search(state: State) -> State:
-    result = mock_searxng_search.invoke(state["query"])
 
-    state["results"] = result
-    return state
+def web_search(state: GraphState):
+
+    result = mock_searxng_search.invoke(state["topic"])
+
+    return {
+        "search_results": result
+    }
+
+
 
 # Node 3: Draft Post
 
-def draft_post(state: State) -> State:
-    structured_llm = llm.with_structured_output(FinalPost)
 
-    prompt = ChatPromptTemplate.from_template(
-        """You are:
-{persona}
+def draft_post(state: GraphState):
 
-Context:
-{results}
+    prompt = f"""
+    Persona:
+    {state['persona']}
 
-Write a strong, opinionated post (max 280 characters).
+    Topic:
+    {state['topic']}
 
-Return JSON in this format:
-{{
-  "bot_id": "{bot_id}",
-  "topic": "<topic>",
-  "post_content": "<post>"
-}}
-"""
-    )
+    Search Results:
+    {state['search_results']}
 
-    chain = prompt | structured_llm
+    Generate a highly opinionated 280-character social media post.
 
-    response = chain.invoke({
-        "persona": state["persona"],
-        "results": state["results"],
-        "bot_id": state["bot_id"]
-    })
+    Return JSON only.
+    """
 
-    state["output"] = response.model_dump()
-    return state
+    response = llm.invoke(prompt)
+
+    return {
+        "post_content": response.content
+    }
 
 
 
 # Build Graph
 
-def build_engine():
-    graph = StateGraph(State)
 
-    graph.add_node("decide", decide_search)
-    graph.add_node("search", web_search)
-    graph.add_node("write", draft_post)
+workflow = StateGraph(GraphState)
 
-    graph.add_edge(START, "decide")
-    graph.add_edge("decide", "search")
-    graph.add_edge("search", "write")
-    graph.add_edge("write", END)
+workflow.add_node("decide_search", decide_search)
+workflow.add_node("web_search", web_search)
+workflow.add_node("draft_post", draft_post)
 
-    return graph.compile()
+workflow.set_entry_point("decide_search")
+
+workflow.add_edge("decide_search", "web_search")
+workflow.add_edge("web_search", "draft_post")
+workflow.add_edge("draft_post", END)
+
+app = workflow.compile()
 
 
 
-# Run Function
+# Run Example
 
-def run_phase2(bot_id: str):
-    state = {
-        "bot_id": bot_id,
-        "persona": BOT_PERSONAS[bot_id]["persona"],
-        "query": "",
-        "results": "",
-        "output": {}
+
+if __name__ == "__main__":
+
+    initial_state = {
+        "bot_id": "bot_a",
+        "persona": "I believe AI and crypto will solve all human problems.",
+        "topic": "",
+        "search_results": "",
+        "post_content": ""
     }
 
-    engine = build_engine()
-    result = engine.invoke(state)
+    result = app.invoke(initial_state)
 
-    return result["output"]
+    final_output = {
+        "bot_id": result["bot_id"],
+        "topic": result["topic"],
+        "post_content": result["post_content"]
+    }
+
+    print(json.dumps(final_output, indent=2))
